@@ -1,7 +1,7 @@
 
 # Media Cleaner for Jellyfin
 
-Automatically delete or protect Jellyfin media according to configurable rules. Works with movies, episodes, videos, audio and audiobooks; episode rules can also delete complete seasons, complete series, or complete ended series when every required episode matches.
+Automatically delete media according to configurable rules. Works with any media types.
 
 ## Installation
 
@@ -43,6 +43,16 @@ The **Advanced** tab contains tools and safety switches that should not be hidde
 ### Troubleshooting
 
 The **Troubleshooting** tab runs a dry-run cleanup report and opens it in a formatted viewer. It shows the plugin configuration, final delete decisions, planned deletion operations, audit entries, outcome summaries, rule-level decisions and item-level decisions. Use it before enabling risky rules or when a rule does not match the items you expected.
+
+### When deletion happens
+
+Saving Media Cleaner settings does not delete anything immediately. Actual deletion happens only when Jellyfin runs the **Media Cleaner cleanup** scheduled task, or when an admin starts that scheduled task manually.
+
+Its default trigger is once per day, but the exact run time, custom triggers, manual runs and disabled state are controlled by Jellyfin's **Scheduled Tasks** page, not by Media Cleaner's rule editor.
+
+On each task run, Media Cleaner loads the current rules, scans the Jellyfin library, builds a cleanup plan, applies protection rules and cascade safety checks, then executes the planned delete operations. If no cleanup rule matches, no item is deleted.
+
+The **Troubleshooting** report uses the same planning path in dry-run mode. It shows what would be deleted by a real scheduled-task run, but the report itself does not delete or modify media.
 
 ### Jellyfin Date Added behavior
 
