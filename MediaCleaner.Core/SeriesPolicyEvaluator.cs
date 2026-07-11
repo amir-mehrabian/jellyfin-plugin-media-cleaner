@@ -9,26 +9,36 @@ internal static class SeriesPolicyEvaluator
     public static IEnumerable<CandidateItem> Apply(
         IEnumerable<CandidateItem> candidates,
         CleanupRule rule,
-        List<CleanupAuditEntry> auditEntries)
+        List<CleanupAuditEntry> auditEntries,
+        IReadOnlyList<MediaItem> catalogItems)
     {
-        var items = candidates.ToList();
-        foreach (var item in items.Where(x => x.Item.Kind != MediaItemKind.Episode))
+        var episodes = new List<CandidateItem>();
+        foreach (var item in candidates)
         {
-            yield return item;
+            if (item.Item.Kind == MediaItemKind.Episode)
+            {
+                episodes.Add(item);
+            }
+            else
+            {
+                yield return item;
+            }
         }
 
-        var episodes = items.Where(x => x.Item.Kind == MediaItemKind.Episode).ToList();
         if (episodes.Count == 0)
         {
             yield break;
         }
 
+        IReadOnlyDictionary<string, MediaItem>? catalogById = null;
+        IReadOnlyDictionary<string, MediaItem> GetCatalogById() =>
+            catalogById ??= catalogItems.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
         var seriesItems = rule.Filters.DeleteEpisodes switch
         {
             SeriesDeleteKind.Episode => KeepEpisodes(episodes, rule, auditEntries),
-            SeriesDeleteKind.Season => BuildSeasonCandidates(episodes, rule, auditEntries),
-            SeriesDeleteKind.Series => BuildSeriesCandidates(episodes, rule, auditEntries, requireEnded: false),
-            SeriesDeleteKind.SeriesEnded => BuildSeriesCandidates(episodes, rule, auditEntries, requireEnded: true),
+            SeriesDeleteKind.Season => BuildSeasonCandidates(episodes, rule, auditEntries, GetCatalogById()),
+            SeriesDeleteKind.Series => BuildSeriesCandidates(episodes, rule, auditEntries, GetCatalogById(), requireEnded: false),
+            SeriesDeleteKind.SeriesEnded => BuildSeriesCandidates(episodes, rule, auditEntries, GetCatalogById(), requireEnded: true),
             _ => throw new NotSupportedException($"Unsupported series delete kind: {rule.Filters.DeleteEpisodes}"),
         };
 
@@ -78,14 +88,20 @@ internal static class SeriesPolicyEvaluator
         }
     }
 
+    private static DateTime? FirstPlaybackLastPlayedDate(IReadOnlyList<PlaybackState> playback)
+    {
+        return playback.Count == 0 ? null : playback[0].LastPlayedDate;
+    }
+
     private static IEnumerable<CandidateItem> BuildSeasonCandidates(
         IEnumerable<CandidateItem> items,
         CleanupRule rule,
-        List<CleanupAuditEntry> auditEntries)
+        List<CleanupAuditEntry> auditEntries,
+        IReadOnlyDictionary<string, MediaItem> catalogById)
     {
         foreach (var group in items.GroupBy(x => x.Item.SeasonId ?? x.Item.SeriesId ?? x.Item.Id))
         {
-            var first = group.MaxBy(x => x.Playback.FirstOrDefault()?.LastPlayedDate ?? x.Item.DateCreated);
+            var first = group.MaxBy(x => FirstPlaybackLastPlayedDate(x.Playback) ?? x.Item.DateCreated);
             if (first is null || first.Item.SeasonId is null)
             {
                 if (first is not null)
@@ -102,7 +118,11 @@ internal static class SeriesPolicyEvaluator
                 continue;
             }
 
-            var seasonEpisodes = first.Item.SeasonEpisodeIds ?? first.Item.EpisodeIds ?? [];
+            catalogById.TryGetValue(first.Item.SeasonId, out var catalogSeason);
+            var catalogSeries = first.Item.SeriesId is not null && catalogById.TryGetValue(first.Item.SeriesId, out var foundSeries)
+                ? foundSeries
+                : null;
+            var seasonEpisodes = catalogSeason?.EpisodeIds ?? first.Item.SeasonEpisodeIds ?? first.Item.EpisodeIds ?? [];
             var allWatched = seasonEpisodes.Count > 0
                 && group.Select(x => x.Item.Id).ToHashSet(StringComparer.OrdinalIgnoreCase).IsSupersetOf(seasonEpisodes);
             if (!allWatched)
@@ -117,7 +137,9 @@ internal static class SeriesPolicyEvaluator
                 continue;
             }
 
-            if (rule.Filters.KeepSeriesKind == SeriesKeepKind.First && first.Item.SeasonId == first.Item.FirstSeasonId)
+            var firstSeasonId = catalogSeries?.SeasonIds?.FirstOrDefault() ?? first.Item.FirstSeasonId;
+            var lastSeasonId = catalogSeries?.SeasonIds?.LastOrDefault() ?? first.Item.LastSeasonId;
+            if (rule.Filters.KeepSeriesKind == SeriesKeepKind.First && first.Item.SeasonId == firstSeasonId)
             {
                 CleanupAudit.AddItem(
                     auditEntries,
@@ -129,7 +151,7 @@ internal static class SeriesPolicyEvaluator
                 continue;
             }
 
-            if (rule.Filters.KeepSeriesKind == SeriesKeepKind.Last && first.Item.SeasonId == first.Item.LastSeasonId)
+            if (rule.Filters.KeepSeriesKind == SeriesKeepKind.Last && first.Item.SeasonId == lastSeasonId)
             {
                 CleanupAudit.AddItem(
                     auditEntries,
@@ -146,15 +168,16 @@ internal static class SeriesPolicyEvaluator
                 throw new NotSupportedException($"Unsupported series keep kind: {rule.Filters.KeepSeriesKind}");
             }
 
+            var seasonItem = catalogSeason ?? first.Item;
             var candidate = new CandidateItem(
-                first.Item with
+                seasonItem with
                 {
                     Id = first.Item.SeasonId,
                     Kind = MediaItemKind.Season,
-                    Name = first.Item.SeasonName ?? first.Item.Name,
-                    FullName = $"{first.Item.SeriesName} | S{first.Item.ParentIndexNumber:D2} | {first.Item.SeasonName ?? first.Item.Name}",
-                    IndexNumber = first.Item.ParentIndexNumber,
-                    EpisodeIds = first.Item.SeasonEpisodeIds,
+                    Name = catalogSeason?.Name ?? first.Item.SeasonName ?? first.Item.Name,
+                    FullName = catalogSeason?.FullName ?? $"{first.Item.SeriesName} | S{first.Item.ParentIndexNumber:D2} | {first.Item.SeasonName ?? first.Item.Name}",
+                    IndexNumber = catalogSeason?.IndexNumber ?? first.Item.ParentIndexNumber,
+                    EpisodeIds = seasonEpisodes,
                 },
                 first.Playback);
 
@@ -173,11 +196,12 @@ internal static class SeriesPolicyEvaluator
         IEnumerable<CandidateItem> items,
         CleanupRule rule,
         List<CleanupAuditEntry> auditEntries,
+        IReadOnlyDictionary<string, MediaItem> catalogById,
         bool requireEnded)
     {
         foreach (var group in items.GroupBy(x => x.Item.SeriesId ?? x.Item.Id))
         {
-            var first = group.MaxBy(x => x.Playback.FirstOrDefault()?.LastPlayedDate ?? x.Item.DateCreated);
+            var first = group.MaxBy(x => FirstPlaybackLastPlayedDate(x.Playback) ?? x.Item.DateCreated);
             if (first is null || first.Item.SeriesId is null)
             {
                 if (first is not null)
@@ -194,7 +218,8 @@ internal static class SeriesPolicyEvaluator
                 continue;
             }
 
-            var seriesEpisodes = first.Item.SeriesEpisodeIds ?? first.Item.EpisodeIds ?? [];
+            catalogById.TryGetValue(first.Item.SeriesId, out var catalogSeries);
+            var seriesEpisodes = catalogSeries?.EpisodeIds ?? first.Item.SeriesEpisodeIds ?? first.Item.EpisodeIds ?? [];
             var allWatched = seriesEpisodes.Count > 0
                 && group.Select(x => x.Item.Id).ToHashSet(StringComparer.OrdinalIgnoreCase).IsSupersetOf(seriesEpisodes);
             if (!allWatched)
@@ -221,14 +246,15 @@ internal static class SeriesPolicyEvaluator
                 continue;
             }
 
+            var seriesItem = catalogSeries ?? first.Item;
             var candidate = new CandidateItem(
-                first.Item with
+                seriesItem with
                 {
                     Id = first.Item.SeriesId,
                     Kind = MediaItemKind.Series,
-                    Name = first.Item.SeriesName ?? first.Item.Name,
-                    FullName = first.Item.SeriesName ?? first.Item.Name,
-                    EpisodeIds = first.Item.SeriesEpisodeIds,
+                    Name = catalogSeries?.Name ?? first.Item.SeriesName ?? first.Item.Name,
+                    FullName = catalogSeries?.FullName ?? first.Item.SeriesName ?? first.Item.Name,
+                    EpisodeIds = seriesEpisodes,
                 },
                 first.Playback);
 
