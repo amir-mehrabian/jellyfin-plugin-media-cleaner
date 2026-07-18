@@ -344,6 +344,7 @@ internal static class PluginConfigurationMapper
         ConfigSeriesKeepKind.None => CoreSeriesKeepKind.None,
         ConfigSeriesKeepKind.First => CoreSeriesKeepKind.First,
         ConfigSeriesKeepKind.Last => CoreSeriesKeepKind.Last,
+        ConfigSeriesKeepKind.LatestWatched => CoreSeriesKeepKind.LatestWatched,
         _ => throw new NotSupportedException($"Unsupported series keep kind: {value}"),
     };
 }

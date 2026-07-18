@@ -63,9 +63,19 @@ internal static class SeriesPolicyEvaluator
             yield break;
         }
 
-        if (rule.Filters.KeepSeriesKind is not SeriesKeepKind.First and not SeriesKeepKind.Last)
+        if (rule.Filters.KeepSeriesKind is not SeriesKeepKind.First and not SeriesKeepKind.Last and not SeriesKeepKind.LatestWatched)
         {
             throw new NotSupportedException($"Unsupported series keep kind: {rule.Filters.KeepSeriesKind}");
+        }
+
+        if (rule.Filters.KeepSeriesKind == SeriesKeepKind.LatestWatched)
+        {
+            foreach (var item in KeepLatestWatchedEpisodes(items, rule, auditEntries))
+            {
+                yield return item;
+            }
+
+            yield break;
         }
 
         var boundaryName = rule.Filters.KeepSeriesKind == SeriesKeepKind.First ? "first" : "latest";
@@ -126,6 +136,73 @@ internal static class SeriesPolicyEvaluator
                     CleanupAuditStage.SeriesPolicy,
                     CleanupAuditOutcome.Skipped,
                     $"series policy keeps the {boundaryName} episode '{boundaryId}' in series '{group.Key}'; that episode did not match this rule");
+            }
+        }
+    }
+
+    private static IEnumerable<CandidateItem> KeepLatestWatchedEpisodes(
+        IEnumerable<CandidateItem> items,
+        CleanupRule rule,
+        List<CleanupAuditEntry> auditEntries)
+    {
+        foreach (var group in items.GroupBy(x => x.Item.SeriesId ?? x.Item.Id))
+        {
+            var groupItems = group.ToList();
+
+            // Prefer an episode that is actively being watched (credits rolling).
+            // IsWatching is true when PlaybackPositionTicks != 0, which stays set
+            // while the player is open even after Jellyfin auto-marks it as played.
+            var watchingCandidate = groupItems
+                .Where(x => x.Playback.Any(p => p.IsWatching))
+                .OrderByDescending(x => x.Playback
+                    .Where(p => p.IsWatching)
+                    .Max(p => p.LastPlayedDate ?? DateTime.MinValue))
+                .FirstOrDefault();
+
+            // Fall back to the episode most recently played by any matching user.
+            var latestPlayedCandidate = watchingCandidate ?? groupItems
+                .Where(x => x.Playback.Any(p => p.LastPlayedDate.HasValue))
+                .OrderByDescending(x => x.Playback
+                    .Max(p => p.LastPlayedDate ?? DateTime.MinValue))
+                .FirstOrDefault();
+
+            if (latestPlayedCandidate is null)
+            {
+                // No playback data in any candidate — cannot determine the latest watched episode;
+                // block deletion of all candidates in this series to be safe.
+                foreach (var item in groupItems)
+                {
+                    CleanupAudit.AddItem(
+                        auditEntries,
+                        item.Item,
+                        rule,
+                        CleanupAuditStage.SeriesPolicy,
+                        CleanupAuditOutcome.Blocked,
+                        $"delete blocked by series policy because the latest watched episode in series '{group.Key}' could not be determined (no playback data)");
+                }
+
+                continue;
+            }
+
+            foreach (var item in groupItems)
+            {
+                if (string.Equals(item.Item.Id, latestPlayedCandidate.Item.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    var reason = watchingCandidate is not null
+                        ? $"rejected by series policy because episode '{item.Item.Id}' is currently being watched (credits may be rolling) in series '{group.Key}'"
+                        : $"rejected by series policy because episode '{item.Item.Id}' is the latest watched episode in series '{group.Key}'";
+
+                    CleanupAudit.AddItem(
+                        auditEntries,
+                        item.Item,
+                        rule,
+                        CleanupAuditStage.SeriesPolicy,
+                        CleanupAuditOutcome.Rejected,
+                        reason);
+                    continue;
+                }
+
+                yield return item;
             }
         }
     }

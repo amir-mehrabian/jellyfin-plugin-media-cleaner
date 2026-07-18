@@ -36,6 +36,7 @@ public enum SeriesKeepKind
     None,
     First,
     Last,
+    LatestWatched,
 }
 
 public enum LocationsListMode

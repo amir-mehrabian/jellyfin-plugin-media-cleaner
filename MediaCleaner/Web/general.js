@@ -858,7 +858,7 @@ function renderDeletionBehavior(rule) {
     const episodeControls = isEpisodeOnly(rule)
         ? selectHtml('DeleteEpisodes', 'Episode deletion scope', rule.Filters.DeleteEpisodes, ['Episode', 'Season', 'Series', 'SeriesEnded'])
             + (['Episode', 'Season'].includes(rule.Filters.DeleteEpisodes)
-                ? selectHtml('KeepSeriesKind', rule.Filters.DeleteEpisodes === 'Season' ? 'Season exception' : 'Episode exception', rule.Filters.KeepSeriesKind, ['None', 'First', 'Last'])
+                ? selectHtml('KeepSeriesKind', rule.Filters.DeleteEpisodes === 'Season' ? 'Season exception' : 'Episode exception', rule.Filters.KeepSeriesKind, ['None', 'First', 'Last', 'LatestWatched'])
                     + `<div class="fieldDescription">${exceptionDescription}</div>`
                 : '')
         : ''
@@ -971,6 +971,7 @@ function triggerDaysLabel(kind) {
 function episodeScopeWithPreservedItem(summary, filters, itemKind) {
     if (filters.KeepSeriesKind === 'First') return `${summary}, excluding the first ${itemKind} in the series, whether or not it matches this rule`
     if (filters.KeepSeriesKind === 'Last') return `${summary}, excluding the latest ${itemKind} in the series, whether or not it matches this rule`
+    if (filters.KeepSeriesKind === 'LatestWatched') return `${summary}, excluding the most recently watched ${itemKind} in the series (including episodes currently playing or rolling credits)`
     return summary
 }
 
@@ -1154,6 +1155,10 @@ function episodeScopeSentence(filters) {
         return 'Delete matching episodes individually, except the latest episode in the series, whether or not it matches this rule'
     }
 
+    if (filters.KeepSeriesKind === 'LatestWatched') {
+        return 'Delete matching episodes individually, except the most recently watched episode in the series (including episodes currently playing or with credits rolling)'
+    }
+
     return ''
 }
 
@@ -1176,6 +1181,10 @@ function episodeScopeClause(filters) {
 
     if (filters.KeepSeriesKind === 'Last') {
         return 'excluding the latest episode in each series, whether or not it matches this rule'
+    }
+
+    if (filters.KeepSeriesKind === 'LatestWatched') {
+        return 'excluding the most recently watched episode in each series (including episodes currently playing or with credits rolling)'
     }
 
     return ''

@@ -36,6 +36,7 @@ namespace MediaCleaner.Configuration
         None,
         First,
         Last,
+        LatestWatched,
     }
 
     public enum LocationsListMode
