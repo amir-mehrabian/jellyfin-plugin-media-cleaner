@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>$(JellyfinTargetFramework)</TargetFramework>
@@ -44,7 +44,7 @@
     <EmbeddedResource Include="Web\troubleshooting.js" />
   </ItemGroup>
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="$(ConfigurationName) == Debug">
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="$(ConfigurationName) == Debug AND '$([MSBuild]::IsOSPlatform(&quot;Windows&quot;))'">
     <Exec Command="xcopy /I /Y $(TargetDir) &quot;$(TargetDir)/data/plugins/MediaCleaner/&quot;" />
   </Target>
 

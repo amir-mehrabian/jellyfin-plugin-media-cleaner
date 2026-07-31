@@ -578,6 +578,29 @@ public class CleanupPlannerTests
     private static MediaItem Movie(string id, params PlaybackState[] playback) =>
         new(id, MediaItemKind.Movie, id, id, Now.AddDays(-30), $"/media/{id}.mkv", $"/media/{id}.mkv", [], playback);
 
+    [Fact]
+    public void Plan_DeletesOlderExpiredEpisode_WhenNewerWatchedEpisodeInCatalogNotExpired()
+    {
+        var rule = Rule(MediaItemKind.Episode, CleanupRuleTriggerKind.Played, 1) with
+        {
+            Filters = Filters(MediaItemKind.Episode) with
+            {
+                DeleteEpisodes = SeriesDeleteKind.Episode,
+                KeepSeriesKind = SeriesKeepKind.LatestWatched,
+            }
+        };
+
+        // e1 was played 8 days ago (expired candidate)
+        var ep1 = Episode("e1", "season1", "series1", Playback("u1", Now.AddDays(-8), isPlayed: true));
+        // e2 was played 3 hours ago (not expired, not a candidate yet, but exists in catalog)
+        var ep2 = Episode("e2", "season1", "series1", Playback("u1", Now.AddHours(-3), isPlayed: true));
+
+        var request = new CleanupRequest(Policy(rule), [User("u1")], [ep1, ep2], false);
+        var plan = Planner().Plan(request);
+
+        plan.Deletions.Should().ContainSingle(x => x.ItemId == "e1");
+    }
+
     private static MediaItem Episode(string id, string seasonId, string seriesId, params PlaybackState[] playback) =>
         new(id, MediaItemKind.Episode, id, id, Now.AddDays(-30), $"/media/{id}.mkv", $"/media/{id}.mkv", [], playback, seriesId, seasonId, seriesId, seasonId, 1, id == "e1" ? 1 : 2);
 

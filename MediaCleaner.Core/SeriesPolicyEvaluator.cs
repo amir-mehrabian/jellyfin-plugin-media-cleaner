@@ -35,7 +35,7 @@ internal static class SeriesPolicyEvaluator
             catalogById ??= catalogItems.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
         var seriesItems = rule.Filters.DeleteEpisodes switch
         {
-            SeriesDeleteKind.Episode => KeepEpisodes(episodes, rule, auditEntries),
+            SeriesDeleteKind.Episode => KeepEpisodes(episodes, rule, auditEntries, catalogItems),
             SeriesDeleteKind.Season => BuildSeasonCandidates(episodes, rule, auditEntries, GetCatalogById()),
             SeriesDeleteKind.Series => BuildSeriesCandidates(episodes, rule, auditEntries, GetCatalogById(), requireEnded: false),
             SeriesDeleteKind.SeriesEnded => BuildSeriesCandidates(episodes, rule, auditEntries, GetCatalogById(), requireEnded: true),
@@ -51,7 +51,8 @@ internal static class SeriesPolicyEvaluator
     private static IEnumerable<CandidateItem> KeepEpisodes(
         IEnumerable<CandidateItem> items,
         CleanupRule rule,
-        List<CleanupAuditEntry> auditEntries)
+        List<CleanupAuditEntry> auditEntries,
+        IReadOnlyList<MediaItem> catalogItems)
     {
         if (rule.Filters.KeepSeriesKind == SeriesKeepKind.None)
         {
@@ -70,7 +71,7 @@ internal static class SeriesPolicyEvaluator
 
         if (rule.Filters.KeepSeriesKind == SeriesKeepKind.LatestWatched)
         {
-            foreach (var item in KeepLatestWatchedEpisodes(items, rule, auditEntries))
+            foreach (var item in KeepLatestWatchedEpisodes(items, rule, auditEntries, catalogItems))
             {
                 yield return item;
             }
@@ -143,32 +144,54 @@ internal static class SeriesPolicyEvaluator
     private static IEnumerable<CandidateItem> KeepLatestWatchedEpisodes(
         IEnumerable<CandidateItem> items,
         CleanupRule rule,
-        List<CleanupAuditEntry> auditEntries)
+        List<CleanupAuditEntry> auditEntries,
+        IReadOnlyList<MediaItem> catalogItems)
     {
+        var userIds = rule.Filters.UserIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var group in items.GroupBy(x => x.Item.SeriesId ?? x.Item.Id))
         {
+            var seriesId = group.Key;
             var groupItems = group.ToList();
+
+            var seriesCatalogEpisodes = catalogItems
+                .Where(x => x.Kind == MediaItemKind.Episode && string.Equals(x.SeriesId ?? x.Id, seriesId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             // Prefer an episode that is actively being watched (credits rolling).
             // IsWatching is true when PlaybackPositionTicks != 0, which stays set
             // while the player is open even after Jellyfin auto-marks it as played.
-            var watchingCandidate = groupItems
-                .Where(x => x.Playback.Any(p => p.IsWatching))
+            var watchingCandidateId = seriesCatalogEpisodes
+                .Where(x => x.Playback
+                    .Where(p => p.HasUserData && (userIds.Count == 0 || userIds.Contains(p.UserId)))
+                    .Any(p => p.IsWatching))
                 .OrderByDescending(x => x.Playback
-                    .Where(p => p.IsWatching)
+                    .Where(p => p.HasUserData && (userIds.Count == 0 || userIds.Contains(p.UserId)) && p.IsWatching)
                     .Max(p => p.LastPlayedDate ?? DateTime.MinValue))
+                .Select(x => x.Id)
                 .FirstOrDefault();
 
-            // Fall back to the episode most recently played by any matching user.
-            var latestPlayedCandidate = watchingCandidate ?? groupItems
+            // Fall back to the episode most recently played by any matching user across the series catalog.
+            var latestPlayedCandidateId = watchingCandidateId ?? seriesCatalogEpisodes
+                .Where(x => x.Playback
+                    .Where(p => p.HasUserData && (userIds.Count == 0 || userIds.Contains(p.UserId)))
+                    .Any(p => p.LastPlayedDate.HasValue))
+                .OrderByDescending(x => x.Playback
+                    .Where(p => p.HasUserData && (userIds.Count == 0 || userIds.Contains(p.UserId)))
+                    .Max(p => p.LastPlayedDate ?? DateTime.MinValue))
+                .Select(x => x.Id)
+                .FirstOrDefault();
+
+            // Fallback: If no catalog episode matched playback, check candidate group items.
+            latestPlayedCandidateId ??= groupItems
                 .Where(x => x.Playback.Any(p => p.LastPlayedDate.HasValue))
-                .OrderByDescending(x => x.Playback
-                    .Max(p => p.LastPlayedDate ?? DateTime.MinValue))
+                .OrderByDescending(x => x.Playback.Max(p => p.LastPlayedDate ?? DateTime.MinValue))
+                .Select(x => x.Item.Id)
                 .FirstOrDefault();
 
-            if (latestPlayedCandidate is null)
+            if (latestPlayedCandidateId is null)
             {
-                // No playback data in any candidate — cannot determine the latest watched episode;
+                // No playback data in any candidate or catalog episode — cannot determine the latest watched episode;
                 // block deletion of all candidates in this series to be safe.
                 foreach (var item in groupItems)
                 {
@@ -178,7 +201,7 @@ internal static class SeriesPolicyEvaluator
                         rule,
                         CleanupAuditStage.SeriesPolicy,
                         CleanupAuditOutcome.Blocked,
-                        $"delete blocked by series policy because the latest watched episode in series '{group.Key}' could not be determined (no playback data)");
+                        $"delete blocked by series policy because the latest watched episode in series '{seriesId}' could not be determined (no playback data)");
                 }
 
                 continue;
@@ -186,11 +209,11 @@ internal static class SeriesPolicyEvaluator
 
             foreach (var item in groupItems)
             {
-                if (string.Equals(item.Item.Id, latestPlayedCandidate.Item.Id, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(item.Item.Id, latestPlayedCandidateId, StringComparison.OrdinalIgnoreCase))
                 {
-                    var reason = watchingCandidate is not null
-                        ? $"rejected by series policy because episode '{item.Item.Id}' is currently being watched (credits may be rolling) in series '{group.Key}'"
-                        : $"rejected by series policy because episode '{item.Item.Id}' is the latest watched episode in series '{group.Key}'";
+                    var reason = watchingCandidateId is not null
+                        ? $"rejected by series policy because episode '{item.Item.Id}' is currently being watched (credits may be rolling) in series '{seriesId}'"
+                        : $"rejected by series policy because episode '{item.Item.Id}' is the latest watched episode in series '{seriesId}'";
 
                     CleanupAudit.AddItem(
                         auditEntries,
