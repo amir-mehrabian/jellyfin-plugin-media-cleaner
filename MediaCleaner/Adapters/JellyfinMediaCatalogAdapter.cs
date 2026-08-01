@@ -19,9 +19,11 @@ internal sealed class JellyfinMediaCatalogAdapter(
     IUserManager userManager,
     ILibraryManager libraryManager,
     IUserDataManager userDataManager,
-    IJellyfinTvHierarchyProvider? tvHierarchyProvider = null) : IMediaCatalogAdapter
+    IJellyfinTvHierarchyProvider? tvHierarchyProvider = null,
+    IClock? clock = null) : IMediaCatalogAdapter
 {
     private readonly IJellyfinTvHierarchyProvider tvHierarchyProvider = tvHierarchyProvider ?? new JellyfinTvHierarchyProvider();
+    private readonly IClock clock = clock ?? new SystemClock();
 
     public CleanupCatalog Create(CleanupPolicy policy, CancellationToken cancellationToken)
     {
@@ -143,7 +145,7 @@ internal sealed class JellyfinMediaCatalogAdapter(
         }
 
         var startDate = rule.Trigger.CountAsNotPlayedAfter >= 0
-            ? DateTime.UtcNow.AddDays(-rule.Trigger.CountAsNotPlayedAfter)
+            ? clock.UtcNow.AddDays(-rule.Trigger.CountAsNotPlayedAfter)
             : (DateTime?)null;
         if (startDate is not null && data.LastPlayedDate < startDate)
         {

@@ -54,9 +54,35 @@ internal static class SeriesPolicyEvaluator
         List<CleanupAuditEntry> auditEntries,
         IReadOnlyList<MediaItem> catalogItems)
     {
+        var userIds = rule.Filters.UserIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var nonWatchingItems = new List<CandidateItem>();
+
+        foreach (var item in items)
+        {
+            if (item.Playback.Where(p => userIds.Count == 0 || userIds.Contains(p.UserId)).Any(p => p.IsWatching))
+            {
+                CleanupAudit.AddItem(
+                    auditEntries,
+                    item.Item,
+                    rule,
+                    CleanupAuditStage.SeriesPolicy,
+                    CleanupAuditOutcome.Rejected,
+                    $"rejected by series policy because episode '{item.Item.Id}' is currently being watched (credits may be rolling) in series '{item.Item.SeriesId ?? item.Item.Id}'");
+            }
+            else
+            {
+                nonWatchingItems.Add(item);
+            }
+        }
+
+        if (nonWatchingItems.Count == 0)
+        {
+            yield break;
+        }
+
         if (rule.Filters.KeepSeriesKind == SeriesKeepKind.None)
         {
-            foreach (var item in items)
+            foreach (var item in nonWatchingItems)
             {
                 yield return item;
             }
@@ -71,7 +97,7 @@ internal static class SeriesPolicyEvaluator
 
         if (rule.Filters.KeepSeriesKind == SeriesKeepKind.LatestWatched)
         {
-            foreach (var item in KeepLatestWatchedEpisodes(items, rule, auditEntries, catalogItems))
+            foreach (var item in KeepLatestWatchedEpisodes(nonWatchingItems, rule, auditEntries, catalogItems))
             {
                 yield return item;
             }
@@ -80,7 +106,7 @@ internal static class SeriesPolicyEvaluator
         }
 
         var boundaryName = rule.Filters.KeepSeriesKind == SeriesKeepKind.First ? "first" : "latest";
-        foreach (var group in items.GroupBy(x => x.Item.SeriesId ?? x.Item.Id))
+        foreach (var group in nonWatchingItems.GroupBy(x => x.Item.SeriesId ?? x.Item.Id))
         {
             var groupItems = group.ToList();
             var boundaryIds = groupItems

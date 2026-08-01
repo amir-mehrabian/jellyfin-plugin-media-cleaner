@@ -855,10 +855,13 @@ function renderDeletionBehavior(rule) {
     const exceptionDescription = rule.Filters.DeleteEpisodes === 'Season'
         ? 'The exception is chosen from every season in the series, even when that season does not match this rule. Cleanup is blocked when it cannot be identified safely.'
         : 'The exception is chosen from every episode in the series, even when that episode does not match this rule. Cleanup is blocked when it cannot be identified safely.'
+    const options = rule.Filters.DeleteEpisodes === 'Season'
+        ? ['None', 'First', 'Last']
+        : ['None', 'First', 'Last', 'LatestWatched']
     const episodeControls = isEpisodeOnly(rule)
         ? selectHtml('DeleteEpisodes', 'Episode deletion scope', rule.Filters.DeleteEpisodes, ['Episode', 'Season', 'Series', 'SeriesEnded'])
             + (['Episode', 'Season'].includes(rule.Filters.DeleteEpisodes)
-                ? selectHtml('KeepSeriesKind', rule.Filters.DeleteEpisodes === 'Season' ? 'Season exception' : 'Episode exception', rule.Filters.KeepSeriesKind, ['None', 'First', 'Last', 'LatestWatched'])
+                ? selectHtml('KeepSeriesKind', rule.Filters.DeleteEpisodes === 'Season' ? 'Season exception' : 'Episode exception', rule.Filters.KeepSeriesKind, options)
                     + `<div class="fieldDescription">${exceptionDescription}</div>`
                 : '')
         : ''
@@ -877,9 +880,13 @@ function readDeletionBehavior(card, rule) {
     }
 
     rule.Filters.DeleteEpisodes = readField(card, 'DeleteEpisodes', 'Episode')
-    rule.Filters.KeepSeriesKind = ['Episode', 'Season'].includes(rule.Filters.DeleteEpisodes)
+    let keepKind = ['Episode', 'Season'].includes(rule.Filters.DeleteEpisodes)
         ? readField(card, 'KeepSeriesKind', 'None')
         : 'None'
+    if (rule.Filters.DeleteEpisodes === 'Season' && keepKind === 'LatestWatched') {
+        keepKind = 'None'
+    }
+    rule.Filters.KeepSeriesKind = keepKind
 }
 
 function deletionBehaviorSummary(rule) {
@@ -1378,6 +1385,11 @@ function normalizeTrigger(trigger) {
 function normalizeFilters(filters) {
     filters = filters || {}
     const normalizedMediaKinds = normalizeMediaKinds(filters.MediaKinds)
+    const deleteEpisodes = filters.DeleteEpisodes || 'Episode'
+    let keepSeriesKind = filters.KeepSeriesKind || 'None'
+    if (deleteEpisodes === 'Season' && keepSeriesKind === 'LatestWatched') {
+        keepSeriesKind = 'None'
+    }
     return {
         MediaKinds: normalizedMediaKinds,
         UserIds: filters.UserIds || [],
@@ -1390,8 +1402,8 @@ function normalizeFilters(filters) {
         EnableTagFilter: filters.EnableTagFilter === true,
         TagFilterMode: filters.TagFilterMode || 'Exclusion',
         Tags: filters.Tags || [],
-        DeleteEpisodes: filters.DeleteEpisodes || 'Episode',
-        KeepSeriesKind: filters.KeepSeriesKind || 'None',
+        DeleteEpisodes: deleteEpisodes,
+        KeepSeriesKind: keepSeriesKind,
     }
 }
 

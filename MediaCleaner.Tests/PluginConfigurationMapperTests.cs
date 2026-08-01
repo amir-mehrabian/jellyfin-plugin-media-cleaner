@@ -276,4 +276,36 @@ public class PluginConfigurationMapperTests
         rule.Filters.FavoriteFilter.Should().Be(MediaCleaner.Core.RuleFavoriteFilterKind.FavoriteByAllUsers);
         rule.Actions.Kind.Should().Be(MediaCleaner.Core.CleanupRuleActionKind.Protect);
     }
+
+    [Fact]
+    public void ToCleanupPolicy_NormalizesSeasonDeleteKindWithLatestWatchedToNone()
+    {
+        var config = new PluginConfiguration
+        {
+            ConfigVersion = 2,
+            Rules =
+            [
+                new CleanupRuleConfiguration
+                {
+                    Id = "season-rule",
+                    Name = "season rule",
+                    Enabled = true,
+                    Trigger = new CleanupRuleTriggerConfiguration { Kind = ConfigRuleTriggerKind.Played, Days = 10 },
+                    Filters = new CleanupRuleFiltersConfiguration
+                    {
+                        MediaKinds = [ConfigRuleMediaKind.Episode],
+                        DeleteEpisodes = ConfigSeriesDeleteKind.Season,
+                        KeepSeriesKind = ConfigSeriesKeepKind.LatestWatched,
+                    },
+                    Actions = new CleanupRuleActionsConfiguration { Kind = ConfigRuleActionKind.Delete },
+                },
+            ],
+        };
+
+        var policy = config.ToCleanupPolicy();
+
+        var rule = policy.Rules.Should().ContainSingle().Subject;
+        rule.Filters.DeleteEpisodes.Should().Be(MediaCleaner.Core.SeriesDeleteKind.Season);
+        rule.Filters.KeepSeriesKind.Should().Be(MediaCleaner.Core.SeriesKeepKind.None);
+    }
 }

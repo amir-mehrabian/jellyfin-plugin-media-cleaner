@@ -144,7 +144,8 @@ public class JellyfinMediaCatalogAdapterLoadTests
             CreateUserManager([user]),
             libraryManager.Object,
             userData.Manager,
-            new CountingTvHierarchyProvider(TestLibrary.Empty));
+            new CountingTvHierarchyProvider(TestLibrary.Empty),
+            new TestClock(Now));
 
         var catalog = adapter.Create(new CleanupPolicy(
             [
@@ -154,6 +155,11 @@ public class JellyfinMediaCatalogAdapterLoadTests
             AllowDeleteIfPlayedBeforeAdded: false), CancellationToken.None);
 
         catalog.Items.Should().ContainSingle(x => x.Id == movie.Id.ToString("N"));
+    }
+
+    private sealed class TestClock(DateTime utcNow) : IClock
+    {
+        public DateTime UtcNow => utcNow;
     }
 
     [Fact]

@@ -260,7 +260,9 @@ internal static class PluginConfigurationMapper
             TagFilterMode: Map(value.Filters.TagFilterMode),
             Tags: new List<string>(value.Filters.Tags),
             DeleteEpisodes: Map(value.Filters.DeleteEpisodes),
-            KeepSeriesKind: Map(value.Filters.KeepSeriesKind)),
+            KeepSeriesKind: Map(value.Filters.DeleteEpisodes) == CoreSeriesDeleteKind.Season && value.Filters.KeepSeriesKind == ConfigSeriesKeepKind.LatestWatched
+                ? CoreSeriesKeepKind.None
+                : Map(value.Filters.KeepSeriesKind)),
         Actions: new CoreCleanupRuleActions(Map(value.Actions.Kind), value.Actions.MarkAsUnplayed));
 
     private static CoreCleanupRuleTriggerKind Map(ConfigCleanupRuleTriggerKind value) => value switch

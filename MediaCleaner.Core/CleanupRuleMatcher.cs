@@ -195,6 +195,7 @@ internal sealed class CleanupRuleMatcher(DateTime now, IPathMatcher pathMatcher,
         return items
             .Where(x => rule.Filters.MediaKinds.Contains(x.Kind))
             .Where(x => now >= x.DateCreated.AddDays(rule.Trigger.Days))
+            .Where(x => !x.Playback.Where(p => userIds.Count == 0 || userIds.Contains(p.UserId)).Any(p => p.IsWatching))
             .Select(item => new CandidateItem(
                 item,
                 item.Playback.Where(x => userIds.Count == 0 || userIds.Contains(x.UserId)).ToList()));
@@ -202,11 +203,15 @@ internal sealed class CleanupRuleMatcher(DateTime now, IPathMatcher pathMatcher,
 
     private bool IsPlayedExpired(IReadOnlyList<PlaybackState> playback, int usersCount, CleanupRuleTrigger trigger)
     {
+        if (playback.Any(x => x.IsWatching))
+        {
+            return false;
+        }
+
         return trigger.PlayedKeepKind switch
         {
             PlayedKeepKind.AnyUser => playback.Any(x => x.IsPlayed && now >= x.LastPlayedDate!.Value.AddDays(trigger.Days)),
-            PlayedKeepKind.AnyUserRolling => !playback.Any(x => x.IsWatching)
-                && playback.Where(x => x.IsPlayed).OrderByDescending(x => x.LastPlayedDate).FirstOrDefault() is { } latest
+            PlayedKeepKind.AnyUserRolling => playback.Where(x => x.IsPlayed).OrderByDescending(x => x.LastPlayedDate).FirstOrDefault() is { } latest
                 && now >= latest.LastPlayedDate!.Value.AddDays(trigger.Days),
             PlayedKeepKind.AllUsers => playback.Count(x => x.IsPlayed && now >= x.LastPlayedDate!.Value.AddDays(trigger.Days)) >= usersCount,
             _ => throw new NotSupportedException($"Unsupported played keep kind: {trigger.PlayedKeepKind}"),

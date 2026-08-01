@@ -51,7 +51,9 @@ public sealed class CleanupPlanner(IClock clock, IPathMatcher pathMatcher, IExtr
                 $"protected by rule '{protectedMatch.Rule.Name}'");
         }
 
-        var decisions = BuildDeleteDecisions(deleteMatches, protectedIds, auditEntries)
+        var expandedProtectedIds = ExpandProtectedIds(protectedIds, request.Items);
+
+        var decisions = BuildDeleteDecisions(deleteMatches, expandedProtectedIds, auditEntries)
             .OrderBy(x => CleanupRuleKinds.Priority(x.Kind))
             .ThenBy(x => x.Kind == ExpiredKind.Played ? FirstPlaybackLastPlayedDate(x.Playback) : x.Item.DateCreated)
             .ToList();
@@ -63,7 +65,7 @@ public sealed class CleanupPlanner(IClock clock, IPathMatcher pathMatcher, IExtr
             // Dry-run needs the deletion-cascade audit entries and counts, but it does not need
             // to retain every DeletionOperation object. On large not-played libraries this avoids
             // keeping tens of thousands of deletion records alive until the report is rendered.
-            foreach (var _ in cascadePlanner.BuildDeletionOperations(decisions, request.Items, protectedIds, auditEntries))
+            foreach (var _ in cascadePlanner.BuildDeletionOperations(decisions, request.Items, expandedProtectedIds, auditEntries))
             {
             }
 
@@ -71,7 +73,7 @@ public sealed class CleanupPlanner(IClock clock, IPathMatcher pathMatcher, IExtr
         }
         else
         {
-            deletions = cascadePlanner.BuildDeletionOperations(decisions, request.Items, protectedIds, auditEntries).ToList();
+            deletions = cascadePlanner.BuildDeletionOperations(decisions, request.Items, expandedProtectedIds, auditEntries).ToList();
         }
 
         return new CleanupPlan(decisions, deletions, auditEntries);
@@ -95,6 +97,62 @@ public sealed class CleanupPlanner(IClock clock, IPathMatcher pathMatcher, IExtr
         return playback.Count == 0 ? null : playback[0].LastPlayedDate;
     }
 
+    private static ISet<string> ExpandProtectedIds(ISet<string> protectedIds, IReadOnlyList<MediaItem> items)
+    {
+        var expanded = new HashSet<string>(protectedIds, StringComparer.OrdinalIgnoreCase);
+        var byId = items.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var id in protectedIds)
+        {
+            if (byId.TryGetValue(id, out var item))
+            {
+                AddDescendantsToProtectedSet(item, byId, expanded);
+            }
+        }
+
+        return expanded;
+    }
+
+    private static void AddDescendantsToProtectedSet(MediaItem item, IReadOnlyDictionary<string, MediaItem> byId, HashSet<string> expanded)
+    {
+        foreach (var seasonId in item.SeasonIds ?? [])
+        {
+            expanded.Add(seasonId);
+            if (byId.TryGetValue(seasonId, out var season))
+            {
+                foreach (var episodeId in season.EpisodeIds ?? [])
+                {
+                    expanded.Add(episodeId);
+                }
+            }
+        }
+
+        foreach (var episodeId in item.EpisodeIds ?? [])
+        {
+            expanded.Add(episodeId);
+        }
+    }
+
+    private static bool IsProtectedItem(MediaItem item, ISet<string> protectedIds)
+    {
+        if (protectedIds.Contains(item.Id))
+        {
+            return true;
+        }
+
+        if (item.SeasonId is not null && protectedIds.Contains(item.SeasonId))
+        {
+            return true;
+        }
+
+        if (item.SeriesId is not null && protectedIds.Contains(item.SeriesId))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static IEnumerable<CleanupDecision> BuildDeleteDecisions(
         IEnumerable<RuleMatch> deleteMatches,
         ISet<string> protectedIds,
@@ -103,7 +161,7 @@ public sealed class CleanupPlanner(IClock clock, IPathMatcher pathMatcher, IExtr
         foreach (var group in deleteMatches.GroupBy(x => x.Item.Id, StringComparer.OrdinalIgnoreCase))
         {
             var first = group.First();
-            if (protectedIds.Contains(first.Item.Id))
+            if (IsProtectedItem(first.Item, protectedIds))
             {
                 foreach (var match in group)
                 {

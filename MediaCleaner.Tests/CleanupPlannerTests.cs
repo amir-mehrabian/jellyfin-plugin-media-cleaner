@@ -457,7 +457,7 @@ public class CleanupPlannerTests
     }
 
     [Fact]
-    public void Plan_ProtectedParentSuppressesOnlyCascadedParentDeletion()
+    public void Plan_ProtectedSeries_SuppressesChildEpisodesAndSeasonsFromDeletion()
     {
         var deleteRule = Rule(MediaItemKind.Episode, CleanupRuleTriggerKind.Played, 10) with
         {
@@ -476,8 +476,8 @@ public class CleanupPlannerTests
 
         var plan = Planner().Plan(new CleanupRequest(Policy(deleteRule, protectRule), [User("u1")], [e1, e2, season, series], false));
 
-        plan.Deletions.Select(x => x.ItemId).Should().ContainInOrder("e1", "e2", "s1");
-        plan.Deletions.Should().NotContain(x => x.ItemId == "show1");
+        plan.Deletions.Should().BeEmpty();
+        plan.AuditEntries.Should().Contain(x => x.ItemId == "e1" && x.Stage == CleanupAuditStage.Protection && x.Outcome == CleanupAuditOutcome.Suppressed);
     }
 
     [Fact]
@@ -599,6 +599,50 @@ public class CleanupPlannerTests
         var plan = Planner().Plan(request);
 
         plan.Deletions.Should().ContainSingle(x => x.ItemId == "e1");
+    }
+
+    [Fact]
+    public void Plan_DoesNotDeleteCurrentlyWatchingItem_UnderAddedAgeRule()
+    {
+        var rule = Rule(MediaItemKind.Movie, CleanupRuleTriggerKind.AddedAge, 10);
+        var watchingMovie = Movie("m1", Playback("u1", Now.AddDays(-1), isPlayed: false, isWatching: true));
+
+        var plan = Planner().Plan(new CleanupRequest(Policy(rule), [User("u1")], [watchingMovie], false));
+        plan.Deletions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Plan_DoesNotDeleteCurrentlyWatchingEpisode_UnderNoneKeepSeriesRule()
+    {
+        var rule = Rule(MediaItemKind.Episode, CleanupRuleTriggerKind.Played, 10) with
+        {
+            Filters = Filters(MediaItemKind.Episode) with { KeepSeriesKind = SeriesKeepKind.None }
+        };
+        var e1 = Episode("e1", "s1", "show1", Playback("u1", Now.AddDays(-20), isPlayed: true, isWatching: true));
+
+        var plan = Planner().Plan(new CleanupRequest(Policy(rule), [User("u1")], [e1], false));
+        plan.Deletions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Plan_ProtectedSeason_SuppressesChildEpisodesFromDeletion()
+    {
+        var deleteRule = Rule(MediaItemKind.Episode, CleanupRuleTriggerKind.Played, 10) with
+        {
+            Filters = Filters(MediaItemKind.Episode) with { DeleteEpisodes = SeriesDeleteKind.Episode }
+        };
+        var protectRule = Rule(MediaItemKind.Season, CleanupRuleTriggerKind.AddedAge, 10) with
+        {
+            Id = "protect-season",
+            Name = "protect season",
+            Actions = new(CleanupRuleActionKind.Protect, false),
+        };
+        var e1 = Episode("e1", "s1", "show1", Playback("u1", Now.AddDays(-20), true));
+        var season = Season("s1", "show1", ["e1"]);
+
+        var plan = Planner().Plan(new CleanupRequest(Policy(deleteRule, protectRule), [User("u1")], [e1, season], false));
+        plan.Deletions.Should().BeEmpty();
+        plan.AuditEntries.Should().Contain(x => x.ItemId == "e1" && x.Stage == CleanupAuditStage.Protection && x.Outcome == CleanupAuditOutcome.Suppressed);
     }
 
     private static MediaItem Episode(string id, string seasonId, string seriesId, params PlaybackState[] playback) =>

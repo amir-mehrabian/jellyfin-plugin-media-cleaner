@@ -113,6 +113,12 @@ internal sealed class DeletionCascadePlanner(IExtraFileProbe extraFileProbe)
         ISet<string> protectedIds,
         out MediaItem protectedChild)
     {
+        if (protectedIds.Contains(item.Id))
+        {
+            protectedChild = byId.TryGetValue(item.Id, out var found) ? found : item;
+            return true;
+        }
+
         foreach (var childId in GetDescendantIds(item, byId))
         {
             if (protectedIds.Contains(childId) && byId.TryGetValue(childId, out protectedChild!))
@@ -151,7 +157,7 @@ internal sealed class DeletionCascadePlanner(IExtraFileProbe extraFileProbe)
         ISet<string> protectedIds,
         List<CleanupAuditEntry> auditEntries)
     {
-        if (protectedIds.Contains(item.Id))
+        if (protectedIds.Contains(item.Id) || (item.SeasonId is not null && protectedIds.Contains(item.SeasonId)) || (item.SeriesId is not null && protectedIds.Contains(item.SeriesId)))
         {
             CleanupAudit.AddCascadeBlocked(auditEntries, item, "delete blocked because item is protected");
             yield break;
